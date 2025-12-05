@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Advanced Chess Engine with AI opponent - Play chess against intelligent computer">
+  <meta name="keywords" content="chess, chess engine, AI chess, online chess">
+  <meta name="author" content="Your Name">
+  <title>Advanced Chess Engine Pro | Play Against AI</title>
+  
+  <!-- React & Babel -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <style>
+    /* Custom animations */
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .animate-slide-in {
+      animation: slideIn 0.3s ease-out;
+    }
+    
+    /* Smooth transitions */
+    * {
+      transition: all 0.2s ease;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // GAME CONSTANTS & CONFIGURATION
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    // Piece values in centipawns (1 pawn = 100)
+    const PIECE_VALUES = { 
+      p: 100,   // Pawn
+      n: 320,   // Knight
+      b: 330,   // Bishop (slightly more valuable than knight)
+      r: 500,   // Rook
+      q: 900,   // Queen
+      k: 20000  // King (infinite value)
+    };
+
+    // Positional bonus tables - encourage strategic square occupation
+    // Higher values = better squares for that piece type
+    const POSITION_TABLES = {
+      // Pawns: prefer center control and advancement
+      p: [
+        [  0,  0,  0,  0,  0,  0,  0,  0], // Rank 8 (promotion)
+        [ 50, 50, 50, 50, 50, 50, 50, 50], // Rank 7 (near promotion)
+        [ 10, 10, 20, 30, 30, 20, 10, 10], // Rank 6
+        [  5,  5, 10, 25, 25, 10,  5,  5], // Rank 5 (center bonus)
+        [  0,  0,  0, 20, 20,  0,  0,  0], // Rank 4
+        [  5, -5,-10,  0,  0,-10, -5,  5], // Rank 3
+        [  5, 10, 10,-20,-20, 10, 10,  5], // Rank 2 (starting)
+        [  0,  0,  0,  0,  0,  0,  0,  0]  // Rank 1
+      ],
+      
+      // Knights: prefer center squares, avoid edges
+      n: [
+        [-50,-40,-30,-30,-30,-30,-40,-50],
+        [-40,-20,  0,  0,  0,  0,-20,-40],
+        [-30,  0, 10, 15, 15, 10,  0,-30],
+        [-30,  5, 15, 20, 20, 15,  5,-30],
+        [-30,  0, 15, 20, 20, 15,  0,-30],
+        [-30,  5, 10, 15, 15, 10,  5,-30],
+        [-40,-20,  0,  5,  5,  0,-20,-40],
+        [-50,-40,-30,-30,-30,-30,-40,-50]
+      ],
+      
+      // Bishops: prefer long diagonals
+      b: [
+        [-20,-10,-10,-10,-10,-10,-10,-20],
+        [-10,  0,  0,  0,  0,  0,  0,-10],
+        [-10,  0,  5, 10, 10,  5,  0,-10],
+        [-10,  5,  5, 10, 10,  5,  5,-10],
+        [-10,  0, 10, 10, 10, 10,  0,-10],
+        [-10, 10, 10, 10, 10, 10, 10,-10],
+        [-10,  5,  0,  0,  0,  0,  5,-10],
+        [-20,-10,-10,-10,-10,-10,-10,-20]
+      ],
+      
+      // Rooks: prefer 7th rank and open files
+      r: [
+        [  0,  0,  0,  0,  0,  0,  0,  0],
+        [  5, 10, 10, 10, 10, 10, 10,  5],
+        [ -5,  0,  0,  0,  0,  0,  0, -5],
+        [ -5,  0,  0,  0,  0,  0,  0, -5],
+        [ -5,  0,  0,  0,  0,  0,  0, -5],
+        [ -5,  0,  0,  0,  0,  0,  0, -5],
+        [ -5,  0,  0,  0,  0,  0,  0, -5],
+        [  0,  0,  0,  5,  5,  0,  0,  0]
+      ],
+      
+      // Queens: center with mobility
+      q: [
+        [-20,-10,-10, -5, -5,-10,-10,-20],
+        [-10,  0,  0,  0,  0,  0,  0,-10],
+        [-10,  0,  5,  5,  5,  5,  0,-10],
+        [ -5,  0,  5,  5,  5,  5,  0, -5],
+        [  0,  0,  5,  5,  5,  5,  0, -5],
+        [-10,  5,  5,  5,  5,  5,  0,-10],
+        [-10,  0,  5,  0,  0,  0,  0,-10],
+        [-20,-10,-10, -5, -5,-10,-10,-20]
+      ],
+      
+      // King: safety in middlegame (corner/castled position)
+      k: [
+        [-30,-40,-40,-50,-50,-40,-40,-30],
+        [-30,-40,-40,-50,-50,-40,-40,-30],
+        [-30,-40,-40,-50,-50,-40,-40,-30],
+        [-30,-40,-40,-50,-50,-40,-40,-30],
+        [-20,-30,-30,-40,-40,-30,-30,-20],
+        [-10,-20,-20,-20,-20,-20,-20,-10],
+        [ 20, 20,  0,  0,  0,  0, 20, 20],
+        [ 20, 30, 10,  0,  0, 10, 30, 20]
+      ]
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // MAIN CHESS ENGINE COMPONENT
+    // ═══════════════════════════════════════════════════════════════════════
+
+    const ChessEngine = () => {
+      // Game state
+      const [board, setBoard] = useState(initBoard());
+      const [selected, setSelected] = useState(null);
+      const [turn, setTurn] = useState('white');
+      const [moves, setMoves] = useState([]);
+      const [gameOver, setGameOver] = useState(null);
+      const [thinking, setThinking] = useState(false);
+      
+      // Settings
+      const [difficulty, setDifficulty] = useState(3);
+      const [showSettings, setShowSettings] = useState(false);
+      const [aiColor, setAiColor] = useState('black');
+      
+      // UI state
+      const [moveHistory, setMoveHistory] = useState([]);
+      const [showHistory, setShowHistory] = useState(false);
+      const [evaluation, setEvaluation] = useState(0);
+
+      // ═════════════════════════════════════════════════════════════════════
+      // BOARD INITIALIZATION
+      // ═════════════════════════════════════════════════════════════════════
+      
+      function initBoard() {
+        const b = Array(8).fill(null).map(() => Array(8).fill(null));
+        const backRank = ['r','n','b','q','k','b','n','r'];
+        
+        // Black pieces (top of board)
+        for(let i = 0; i < 8; i++) {
+          b[0][i] = { type: backRank[i], color: 'black' };
+          b[1][i] = { type: 'p', color: 'black' };
+        }
+        
+        // White pieces (bottom of board)
+        for(let i = 0; i < 8; i++) {
+          b[6][i] = { type: 'p', color: 'white' };
+          b[7][i] = { type: backRank[i], color: 'white' };
+        }
+        
+        return b;
+      }
+
+      // ═════════════════════════════════════════════════════════════════════
+      // MOVE GENERATION - Calculate all legal moves for a piece
+      // ═════════════════════════════════════════════════════════════════════
+
+      function getLegalMoves(board, row, col) {
+        const piece = board[row][col];
+        if (!piece) return [];
+        
+        const moves = [];
+        const dir = piece.color === 'white' ? -1 : 1; // Direction pawns move
+        
+        // ─────────────────────────────────────────────────────────────────
+        // PAWN MOVES
+        // ─────────────────────────────────────────────────────────────────
+        if (piece.type === 'p') {
+          const startRank = piece.color === 'white' ? 6 : 1;
+          
+          // Forward move (1 square)
+          if (row + dir >= 0 && row + dir < 8 && !board[row + dir][col]) {
+            moves.push([row + dir, col]);
+            
+            // Double move from starting position
+            if (row === startRank && !board[row + 2*dir][col]) {
+              moves.push([row + 2*dir, col]);
+            }
+          }
+          
+          // Diagonal captures
+          [-1, 1].forEach(dc => {
+            const nr = row + dir, nc = col + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && 
+                board[nr][nc] && board[nr][nc].color !== piece.color) {
+              moves.push([nr, nc]);
+            }
+          });
+        }
+        
+        // ─────────────────────────────────────────────────────────────────
+        // KNIGHT MOVES (L-shape: 2+1 or 1+2)
+        // ─────────────────────────────────────────────────────────────────
+        else if (piece.type === 'n') {
+          const knightMoves = [
+            [2,1], [2,-1], [-2,1], [-2,-1],
+            [1,2], [1,-2], [-1,2], [-1,-2]
+          ];
+          
+          knightMoves.forEach(([dr, dc]) => {
+            const nr = row + dr, nc = col + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && 
+                (!board[nr][nc] || board[nr][nc].color !== piece.color)) {
+              moves.push([nr, nc]);
+            }
+          });
+        }
+        
+        // ─────────────────────────────────────────────────────────────────
+        // SLIDING PIECES (Bishop, Rook, Queen)
+        // ─────────────────────────────────────────────────────────────────
+        else if (['b','r','q'].includes(piece.type)) {
+          let directions = [];
+          
+          if (piece.type === 'b') {
+            // Bishop: diagonals only
+            directions = [[1,1], [1,-1], [-1,1], [-1,-1]];
+          } else if (piece.type === 'r') {
+            // Rook: straight lines only
+            directions = [[1,0], [-1,0], [0,1], [0,-1]];
+          } else {
+            // Queen: both diagonals and straight
+            directions = [[1,1], [1,-1], [-1,1], [-1,-1], [1,0], [-1,0], [0,1], [0,-1]];
+          }
+          
+          // Slide in each direction until hitting edge or piece
+          directions.forEach(([dr, dc]) => {
+            for(let i = 1; i < 8; i++) {
+              const nr = row + dr*i, nc = col + dc*i;
+              
+              // Off board
+              if (nr < 0 || nr >= 8 || nc < 0 || nc >= 8) break;
+              
+              // Hit own piece - stop
+              if (board[nr][nc]) {
+                if (board[nr][nc].color !== piece.color) {
+                  moves.push([nr, nc]); // Can capture enemy
+                }
+                break;
+              }
+              
+              moves.push([nr, nc]);
+            }
+          });
+        }
+        
+        // ─────────────────────────────────────────────────────────────────
+        // KING MOVES (one square in any direction)
+        // ─────────────────────────────────────────────────────────────────
+        else if (piece.type === 'k') {
+          const kingMoves = [
+            [1,0], [-1,0], [0,1], [0,-1],
+            [1,1], [1,-1], [-1,1], [-1,-1]
+          ];
+          
+          kingMoves.forEach(([dr, dc]) => {
+            const nr = row + dr, nc = col + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && 
+                (!board[nr][nc] || board[nr][nc].color !== piece.color)) {
+              moves.push([nr, nc]);
+            }
+          });
+        }
+        
+        // Filter out moves that leave king in check
+        return moves.filter(([r, c]) => !isCheck(board, piece.color, [row, col], [r, c]));
+      }
+
+      // ═════════════════════════════════════════════════════════════════════
+      // CHECK DETECTION - Verify if a move leaves king in check
+      // ═════════════════════════════════════════════════════════════════════
+
+      function isCheck(board, color, from, to) {
+        // Simulate the move
+        const testBoard = board.map(r => [...r]);
+        testBoard[to[0]][to[1]] = testBoard[from[0]][from[1]];
+        testBoard[from[0]][from[1]] = null;
+        
+        // Find king position after move
+        let kingPos = null;
+        for(let r = 0; r < 8; r++) {
+          for(let c = 0; c < 8; c++) {
+            if (testBoard[r][c]?.type === 'k' && testBoard[r][c].color === color) {
+              kingPos = [r, c];
+              break;
+            }
+          }
+          if (kingPos) break;
+        }
+        
+        if (!kingPos) return true; // King not found = invalid
+        
+        // Check if any enemy piece can attack king
+        for(let r = 0; r < 8; r++) {
+          for(let c = 0; c < 8; c++) {
+            const p = testBoard[r][c];
+            if (p && p.color !== color) {
+              const attackMoves = getRawMoves(testBoard, r, c);
+              if (attackMoves.some(([mr, mc]) => mr === kingPos[0] && mc === kingPos[1])) {
+                return true; // King is in check
+              }
+            }
+          }
+        }
+        
+        return false; // King is safe
+      }
+
+      // Get moves without check validation (for check detection only)
+      function getRawMoves(board, row, col) {
+        const piece = board[row][col];
+        if (!piece) return [];
+        
+        const moves = [];
+        const dir = piece.color === 'white' ? -1 : 1;
+        
+        if (piece.type === 'p') {
+          // Pawns can only attack diagonally
+          [-1, 1].forEach(dc => {
+            const nr = row + dir, nc = col + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) moves.push([nr, nc]);
+          });
+        } else if (piece.type === 'n') {
+          [[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]].forEach(([dr,dc]) => {
+            const nr = row + dr, nc = col + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) moves.push([nr, nc]);
+          });
+        } else if (['b','r','q'].includes(piece.type)) {
+          let dirs = [];
+          if (piece.type === 'b') dirs = [[1,1],[1,-1],[-1,1],[-1,-1]];
+          else if (piece.type === 'r') dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+          else dirs = [[1,1],[1,-1],[-1,1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+          
+          dirs.forEach(([dr,dc]) => {
+            for(let i = 1; i < 8; i++) {
+              const nr = row + dr*i, nc = col + dc*i;
+              if (nr < 0 || nr >= 8 || nc < 0 || nc >= 8 || board[nr][nc]) break;
+              moves.push([nr, nc]);
+            }
+          });
+        } else if (piece.type === 'k') {
+          [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr,dc]) => {
+            const nr = row + dr, nc = col + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) moves.push([nr, nc]);
+          });
+        }
+        
+        return moves;
+      }
+
+      // ═════════════════════════════════════════════════════════════════════
+      // POSITION EVALUATION - Calculate board score
+      // ═════════════════════════════════════════════════════════════════════
+
+      function evaluateBoard(board, color) {
+        let score = 0;
+        
+        for(let r = 0; r < 8; r++) {
+          for(let c = 0; c < 8; c++) {
+            const p = board[r][c];
+            if (!p) continue;
+            
+            // Material value
+            const materialValue = PIECE_VALUES[p.type];
+            
+            // Positional bonus (from piece-square tables)
+            const posBonus = POSITION_TABLES[p.type]?.[r]?.[c] || 0;
+            
+            const totalValue = materialValue + posBonus;
+            
+            // Add to our score, subtract from opponent's
+            score += p.color === color ? totalValue : -totalValue;
+          }
+        }
+        
+        return score;
+      }
+
+      // ═════════════════════════════════════════════════════════════════════
+      // MINIMAX ALGORITHM WITH ALPHA-BETA PRUNING
+      // Core AI decision-making algorithm
+      // ═════════════════════════════════════════════════════════════════════
+
+      function minimax(board, depth, alpha, beta, maximizing, color) {
+        // Base case: reached search depth limit
+        if (depth === 0) {
+          return evaluateBoard(board, color);
+        }
+        
+        // Generate all possible moves for current player
+        const allMoves = [];
+        const currentColor = maximizing ? color : (color === 'white' ? 'black' : 'white');
+        
+        for(let r = 0; r < 8; r++) {
+          for(let c = 0; c < 8; c++) {
+            if (board[r][c]?.color === currentColor) {
+              const pieceMoves = getLegalMoves(board, r, c);
+              pieceMoves.forEach(m => allMoves.push([[r,c], m]));
+            }
+          }
+        }
+        
+        // No legal moves = checkmate or stalemate
+        if (allMoves.length === 0) {
+          return maximizing ? -999999 : 999999;
+        }
+        
+        // Maximizing player (AI trying to maximize score)
+        if (maximizing) {
+          let maxEval = -Infinity;
+          
+          for(const [from, to] of allMoves) {
+            // Make move
+            const newBoard = board.map(r => [...r]);
+            newBoard[to[0]][to[1]] = newBoard[from[0]][from[1]];
+            newBoard[from[0]][from[1]] = null;
+            
+            // Recursively evaluate
+            const ev = minimax(newBoard, depth - 1, alpha, beta, false, color);
+            maxEval = Math.max(maxEval, ev);
+            alpha = Math.max(alpha, ev);
+            
+            // Alpha-beta pruning: cut off search if we found better move elsewhere
+            if (beta <= alpha) break;
+          }
+          
+          return maxEval;
+        }
+        
+        // Minimizing player (opponent trying to minimize our score)
+        else {
+          let minEval = Infinity;
+          
+          for(const [from, to] of allMoves) {
+            // Make move
+            const newBoard = board.map(r => [...r]);
+            newBoard[to[0]][to[1]] = newBoard[from[0]][from[1]];
+            newBoard[from[0]][from[1]] = null;
+            
+            // Recursively evaluate
+            const ev = minimax(newBoard, depth - 1, alpha, beta, true, color);
+            minEval = Math.min(minEval, ev);
+            beta = Math.min(beta, ev);
+            
+            // Alpha-beta pruning
+            if (beta <= alpha) break;
+          }
+          
+          return minEval;
+        }
+      }
+
+      // ═════════════════════════════════════════════════════════════════════
+      // AI MOVE SELECTION - Find best move using minimax
+      // ═════════════════════════════════════════════════════════════════════
+
+      function findBestMove(board, color, depth) {
+        const allMoves = [];
+        
+        // Generate all legal moves for AI
+        for(let r = 0; r < 8; r++) {
+          for(let c = 0; c < 8; c++) {
+            if (board[r][c]?.color === color) {
+              const moves = getLegalMoves(board, r, c);
+              moves.forEach(m => allMoves.push([[r,c], m]));
+            }
+          }
+        }
+        
+        let bestMove = null;
+        let bestValue = -Infinity;
+        
+        // Evaluate each possible move
+        for(const [from, to] of allMoves) {
+          const newBoard = board.map(r => [...r]);
+          newBoard[to[0]][to[1]] = newBoard[from[0]][from[1]];
+          newBoard[from[0]][from[1]] = null;
+          
+          const value = minimax(newBoard, depth - 1, -Infinity, Infinity, false, color);
+          
+          if (value > bestValue) {
+            bestValue = value;
+            bestMove = [from, to];
+          }
+        }
+        
+        return bestMove;
+      }
+
+      // ═════════════════════════════════════════════════════════════════════
+      // AI TURN HANDLER - Trigger AI move when it's AI's turn
+      // ═════════════════════════════════════════════════════════════════════
+
+      useEffect(() => {
+        if (turn === aiColor && !gameOver && !thinking) {
+          setThinking(true);
+          
+          // Small delay for UX (show "thinking" indicator)
+          setTimeout(() => {
+            const move = findBestMove(board, aiColor, difficulty);
+            if (move) {
+              makeMove(move[0][0], move[0][1], move[1][0], move[1][1]);
+            }
+            setThinking(false);
+          }, 100);
+        }
+      }, [turn, gameOver, aiColor]);
+
+      // ═════════════════════════════════════════════════════════════════════
+      // MOVE EXECUTION - Apply move to board and update game state
+      // ═════════════════════════════════════════════════════════════════════
+
+      function makeMove(fromR, fromC, toR, toC) {
+        const newBoard = board.map(r => [...r]);
+        const piece = newBoard[fromR][fromC];
+        const captured = newBoard[toR][toC];
+        
+        // Execute move
+        newBoard[toR][toC] = piece;
+        newBoard[fromR][fromC] = null;
+        
+        // Create algebraic notation for move history
+        const fil
